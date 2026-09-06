@@ -29,6 +29,7 @@
     --grey:#323232;
     --glass:#E3E3E3;
     --signal:#00FF51;
+    --alert:#FF0000;
 
     --sans:Neue Haas Grotesk Display Pro,NeueHaasGroteskDisplay,Helvetica Neue,Helvetica,Arial,sans-serif;
     --display:Rhymes Display,RhymesDisplay-Light,Newsreader,Georgia,Times New Roman,serif;
@@ -207,11 +208,50 @@
     padding-top:clamp(12px,1.5vw,16px);
     border-top:1px solid rgba(227,227,227,.09);
   }
+  .pass .fields{grid-template-columns:2fr .7fr 1fr 1.3fr;}
   .fields > div{display:grid;gap:5px;min-width:0;}
   .fields dt{font-size:9px;letter-spacing:.18em;color:rgba(227,227,227,.42);}
   .fields dd{margin:0;font-size:11.5px;color:var(--white);}
   #status.armed{color:var(--white);}
   #status.done{color:var(--signal);}
+  #status.bad{color:var(--alert);}
+
+  /* the pass fills itself in: ticket fields that happen to be inputs */
+  .fld{
+    font:inherit;
+    letter-spacing:inherit;
+    text-transform:inherit;
+    width:100%;
+    min-width:0;
+    padding:0 0 3px;
+    border:0;
+    border-bottom:1px solid transparent;
+    background:none;
+    color:var(--white);
+    border-radius:0;
+    -webkit-appearance:none;
+    appearance:none;
+  }
+  .fld::placeholder{color:rgba(227,227,227,.42);text-transform:none;letter-spacing:.14em;}
+  .fld:disabled{-webkit-text-fill-color:var(--white);color:var(--white);opacity:1;}
+  .fld:enabled{border-bottom-color:var(--grey);}
+  .fld:focus{outline:none;border-bottom-color:var(--glass);}
+  .fld.bad{border-bottom-color:var(--alert);}
+
+  .confirm{
+    background:none;
+    border:0;
+    margin:0;
+    padding:0 0 0 .8em;
+    font:inherit;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    color:var(--white);
+    cursor:pointer;
+    text-decoration:underline;
+    text-underline-offset:3px;
+  }
+  .confirm:focus-visible{outline:1px solid var(--glass);outline-offset:3px;}
 
   .undo{
     background:none;
@@ -267,7 +307,7 @@
     .notch{left:auto;}
     .notch.top{top:-8px;left:-8px;}
     .notch.bottom{bottom:auto;top:-8px;right:-8px;}
-    .fields{grid-template-columns:repeat(2,minmax(0,1fr));}
+    .fields,.pass .fields{grid-template-columns:repeat(2,minmax(0,1fr));}
     .plane{width:96px;}
     h1{max-width:none;}
   }
@@ -316,9 +356,11 @@
         </div>
 
         <dl class="mono fields">
+          <div><dt><label for="pname">Passenger</label></dt>
+               <dd><input id="pname" class="fld" type="text" placeholder="&mdash;"
+                          autocomplete="name" maxlength="60" disabled></dd></div>
           <div><dt>Flight</dt><dd>001</dd></div>
           <div><dt>Date</dt><dd>04 Dec 2026</dd></div>
-          <div><dt>Class</dt><dd>Research</dd></div>
           <div><dt>Status</dt><dd id="status">Drag to board</dd></div>
         </dl>
       </div>
@@ -446,41 +488,58 @@
     }
   }
 
-  /* ---------- the boarding gesture ---------------------------------- */
+  /* ---------- registration ------------------------------------------ */
+  /* Paste your Apps Script web-app /exec URL between the quotes.
+     Setup steps are in REGISTRATIONS.md next to this file. */
+  var ENDPOINT='https://script.google.com/macros/s/AKfycbz0KIH4KsZOBD-IRaF-Q1rdTb7IZzpxVvwh1OhSMmDpsMbjTcUxae6rODbn9L3OQQGO/exec';
+
   var rail=document.getElementById('rail');
   var plane=document.getElementById('plane');
   var cv=document.getElementById('planecv');
   var fill=document.getElementById('fill');
-  var status=document.getElementById('status');
+  var statusEl=document.getElementById('status');
+  var nameEl=document.getElementById('pname');
 
   var KEY='microagi.neurips.boarded';
-  var value=0, boarded=false, dragging=false, startX=0, startVal=0;
+  var state='idle';               /* idle | armed | sending | boarded | error */
+  var value=0, dragging=false, startX=0, startVal=0, msg='';
 
   function span(){ return Math.max(1, rail.clientWidth - plane.offsetWidth); }
+
+  function btn(cls,label,fn){
+    var b=document.createElement('button');
+    b.type='button'; b.className=cls; b.textContent=label;
+    b.addEventListener('click',fn);
+    return b;
+  }
 
   function paint(){
     var x=value*span();
     plane.style.transform='translate3d('+x+'px,-50%,0)';
     fill.style.width=x+'px';
     plane.setAttribute('aria-valuenow',Math.round(value*100));
+    fill.style.background = state==='boarded'
+      ? 'linear-gradient(to right, rgba(0,255,81,0) 0%, #00FF51 55%)'
+      : 'linear-gradient(to right, rgba(227,227,227,0) 0%, #E3E3E3 88%)';
 
-    if(boarded){
-      fill.style.background='linear-gradient(to right, rgba(0,255,81,0) 0%, #00FF51 55%)';
-      status.className='done';
-      status.innerHTML='Boarded<button class="undo" id="undo" type="button">reset</button>';
-      document.getElementById('undo').addEventListener('click',reset);
-      plane.setAttribute('aria-valuetext','Boarded');
+    statusEl.className=''; statusEl.textContent='';
+    if(state==='idle'){
+      if(dragging||value>0.01){ statusEl.className='armed'; statusEl.textContent='Boarding '+Math.round(value*100)+'%'; }
+      else { statusEl.textContent='Drag to board'; }
+    }else if(state==='armed'){
+      statusEl.className='armed'; statusEl.textContent='Add your details';
+      statusEl.appendChild(btn('confirm','Confirm',submit));
+    }else if(state==='sending'){
+      statusEl.className='armed'; statusEl.textContent='Confirming…';
+    }else if(state==='boarded'){
+      statusEl.className='done'; statusEl.textContent='Boarded';
+      statusEl.appendChild(btn('undo','reset',reset));
     }else{
-      fill.style.background='linear-gradient(to right, rgba(227,227,227,0) 0%, #E3E3E3 88%)';
-      if(dragging||value>0.01){
-        status.className='armed';
-        status.textContent='Boarding '+Math.round(value*100)+'%';
-      }else{
-        status.className='';
-        status.textContent='Drag to board';
-      }
-      plane.setAttribute('aria-valuetext', value>0.01 ? Math.round(value*100)+' percent' : 'Not boarded');
+      statusEl.className='bad'; statusEl.textContent=msg||'Could not confirm';
+      statusEl.appendChild(btn('confirm','Retry',submit));
     }
+    plane.setAttribute('aria-valuetext',
+      state==='boarded' ? 'Boarded' : (value>0.01 ? Math.round(value*100)+' percent' : 'Not boarded'));
   }
 
   function settle(v){
@@ -489,19 +548,79 @@
     setTimeout(function(){ plane.classList.remove('glide'); },440);
   }
 
-  function board(){
-    boarded=true;
-    try{ localStorage.setItem(KEY,'1'); }catch(e){}
+  /* reaching Sydney opens the pass for its passenger */
+  function arm(){
+    if(state!=='idle') return;
+    state='armed';
+    nameEl.disabled=false;
+    nameEl.placeholder='Your name';
+    settle(1);
+    setTimeout(function(){ try{ nameEl.focus(); }catch(e){} },140);
+  }
+
+  function collect(){
+    var n=nameEl.value.trim();
+    nameEl.classList.toggle('bad', !n);
+    if(!n){ msg='Name required'; nameEl.focus(); return null; }
+    return {name:n};
+  }
+
+  function submit(){
+    if(state==='sending'||state==='boarded') return;
+    var d=collect();
+    if(!d){ state='error'; paint(); return; }
+    if(ENDPOINT.indexOf('https://')!==0){
+      msg='Endpoint not configured'; state='error'; paint(); return;
+    }
+    state='sending'; paint();
+
+    var ctrl=new AbortController();
+    var timer=setTimeout(function(){ ctrl.abort(); },12000);
+    fetch(ENDPOINT,{
+      method:'POST',
+      /* text/plain keeps this a simple request, so no CORS preflight */
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify({name:d.name,flight:'001',route:'SFO-SYD'}),
+      signal:ctrl.signal
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(res){
+      clearTimeout(timer);
+      if(res&&res.ok){ confirmBoarded(d); }
+      else { msg='Could not confirm'; state='error'; paint(); }
+    })
+    .catch(function(){
+      clearTimeout(timer);
+      msg='No connection — retry'; state='error'; paint();
+    });
+  }
+
+  function confirmBoarded(d){
+    state='boarded';
+    nameEl.value=d.name;
+    nameEl.disabled=true;
+    nameEl.classList.remove('bad');
+    try{ localStorage.setItem(KEY,JSON.stringify(d)); }catch(e){}
     settle(1);
   }
+
   function reset(){
-    boarded=false;
+    state='idle'; value=0; msg='';
+    nameEl.value='';
+    nameEl.disabled=true;
+    nameEl.placeholder='—';
+    nameEl.classList.remove('bad');
     try{ localStorage.removeItem(KEY); }catch(e){}
     settle(0);
   }
 
+  nameEl.addEventListener('keydown',function(e){
+    if(e.key==='Enter'){ e.preventDefault(); submit(); }
+  });
+  nameEl.addEventListener('input',function(){ nameEl.classList.remove('bad'); });
+
   plane.addEventListener('pointerdown',function(e){
-    if(boarded) return;
+    if(state!=='idle') return;
     dragging=true; startX=e.clientX; startVal=value;
     plane.setPointerCapture(e.pointerId);
     plane.classList.remove('glide');
@@ -515,24 +634,30 @@
   function release(){
     if(!dragging) return;
     dragging=false;
-    if(value>=0.96) board(); else settle(0);
+    if(value>=0.96) arm(); else settle(0);
   }
   plane.addEventListener('pointerup',release);
   plane.addEventListener('pointercancel',release);
 
   plane.addEventListener('keydown',function(e){
+    if(e.key==='Home'){ if(state==='boarded') reset(); return; }
+    if(state!=='idle') return;
     var step=0.08, v=value;
     if(e.key==='ArrowRight'||e.key==='ArrowUp') v=Math.min(1,value+step);
     else if(e.key==='ArrowLeft'||e.key==='ArrowDown') v=Math.max(0,value-step);
     else if(e.key==='End'||e.key===' '||e.key==='Enter') v=1;
-    else if(e.key==='Home'){ if(boarded) reset(); return; }
     else return;
     e.preventDefault();
-    if(boarded) return;
-    if(v>=0.999){ board(); } else { settle(v); }
+    if(v>=0.999){ arm(); } else { settle(v); }
   });
 
-  try{ if(localStorage.getItem(KEY)==='1'){ boarded=true; value=1; } }catch(e){}
+  try{
+    var saved=JSON.parse(localStorage.getItem(KEY)||'null');
+    if(saved&&saved.name){
+      state='boarded'; value=1;
+      nameEl.value=saved.name;
+    }
+  }catch(e){}
 
   function layout(){ drawPlane(cv); paint(); }
   layout();
